@@ -182,7 +182,7 @@ static void print_prometheus_reg(int fd, uint8_t reg, const char *fmt, ...)
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
 	va_end(ap);
-	printf("%5.1f\n", mkv(val));
+	printf(" %.1f\n", mkv(val));
 }
 #else
 static void print_std_reg(int fd, uint8_t reg, const char *fmt, ...)
@@ -336,29 +336,33 @@ void dump_powers(int fd)
 {
 #if PROMETHEUS
 	uint8_t osel;
-        uint32_t volts[3];
-        uint32_t amps[3];
-        uint32_t watts[3];
+        uint32_t val;
+        double amps[3];
+        double amps[3];
+        double watts[3];
 
 	for (osel = 0; osel < 3; osel++) {
 		// reg0 write (output select)
 		send_recv_cmd(fd, 0x02, 0x00, osel, NULL, 0);
-		read_reg32(fd, 0x8b, &volts[osel]);
-		read_reg32(fd, 0x8c, &amps[osel]);
-		read_reg32(fd, 0x96, &watts[osel]);
+		read_reg32(fd, 0x8b, &val);
+		volts[osel] = mkv(val);
+		read_reg32(fd, 0x8c, &val);
+		amps[osel] = mkv(val);
+		read_reg32(fd, 0x96, &val);
+		watts[osel] = mkv(val);
 	}
 	printf("# HELP " PROMETHEUS_PREFIX "output_volts single output in volts\n");
 	printf("# TYPE " PROMETHEUS_PREFIX "output_volts gauge\n");
 	for (osel = 0; osel < 3; osel++)
-            printf(PROMETHEUS_PREFIX "output_volts{ouput=\"%u\"} %u\n", osel, volts[osel]);
+            printf(PROMETHEUS_PREFIX "output_volts{ouput=\"%u\"} %.1f\n", osel, volts[osel]);
 	printf("# HELP " PROMETHEUS_PREFIX "output_amperes single output in amperes\n");
 	printf("# TYPE " PROMETHEUS_PREFIX "output_amperes gauge\n");
 	for (osel = 0; osel < 3; osel++)
-            printf(PROMETHEUS_PREFIX "output_amperes{ouput=\"%u\"} %u\n", osel, amps[osel]);
+            printf(PROMETHEUS_PREFIX "output_amperes{ouput=\"%u\"} %.1f\n", osel, amps[osel]);
 	printf("# HELP " PROMETHEUS_PREFIX "output_watts single output power in watts\n");
 	printf("# TYPE " PROMETHEUS_PREFIX "output_watts gauge\n");
 	for (osel = 0; osel < 3; osel++)
-            printf(PROMETHEUS_PREFIX "output_watts{ouput=\"%u\"} %u\n", osel, watts[osel]);
+            printf(PROMETHEUS_PREFIX "output_watts{ouput=\"%u\"} %.1f\n", osel, watts[osel]);
 #else
 	uint8_t osel;
 
