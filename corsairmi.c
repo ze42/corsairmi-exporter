@@ -337,7 +337,7 @@ void dump_powers(int fd)
 #if PROMETHEUS
 	uint8_t osel;
         uint32_t val;
-        double amps[3];
+        double volts[3];
         double amps[3];
         double watts[3];
 
