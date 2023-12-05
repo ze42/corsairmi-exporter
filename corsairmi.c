@@ -64,6 +64,10 @@
 #include <errno.h>
 #include <linux/hidraw.h>
 
+
+#define PROMETHEUS 1
+#define PROMETHEUS_PREFIX "corsair_"
+
 static const uint16_t products[] = {
 	0x1c0a, /* RM650i */
 	0x1c0b, /* RM750i */
@@ -166,6 +170,21 @@ static double mkv(uint16_t v16)
 	return (double)v * pow(2.0, p);
 }
 
+#if PROMETHEUS
+static void print_prometheus_reg(int fd, uint8_t reg, const char *fmt, ...)
+{
+	uint16_t val;
+	va_list ap;
+
+	read_reg16(fd, reg, &val);
+
+	printf(PROMETHEUS_PREFIX);
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+	printf("%5.1f\n", mkv(val));
+}
+#else
 static void print_std_reg(int fd, uint8_t reg, const char *fmt, ...)
 {
 	size_t len = 0;
@@ -183,6 +202,7 @@ static void print_std_reg(int fd, uint8_t reg, const char *fmt, ...)
 
 	printf("%5.1f\n", mkv(val));
 }
+#endif
 
 static int try_open_device(const char *name, int report_errors)
 {
@@ -227,12 +247,115 @@ out:
 	return fd;
 }
 
+void dump_names(int fd)
+{
+	char name[64];
+	char vendor[64];
+	char product[64];
+
+	bzero(name, sizeof(name));
+	bzero(vendor, sizeof(vendor));
+       	bzero(product, sizeof(product));
+
+	send_recv_cmd(fd, 0xfe, 0x03, 0x00, name, sizeof(name) - 1);
+	read_reg(fd, 0x99, vendor, sizeof(vendor) - 1);
+	read_reg(fd, 0x9a, product, sizeof(product) - 1);
+#if PROMETHEUS
+	printf(PROMETHEUS_PREFIX "info{name=\"%s\",vendor=\"%s\",product=\"%s\"} 1\n", name, vendor, product);
+#else
+	printf("name:           '%s'\n", name);
+	printf("vendor:         '%s'\n", vendor);
+	printf("product:        '%s'\n", product);
+#endif
+}
+
+void dump_times(int fd)
+{
+	uint32_t powered;
+	uint32_t uptime;
+
+	read_reg32(fd, 0xd1, &powered);
+	read_reg32(fd, 0xd2, &uptime);
+#if PROMETHEUS
+	printf(PROMETHEUS_PREFIX "powered_time %u\n", powered);
+	printf(PROMETHEUS_PREFIX "uptime %u\n", uptime);
+#else
+	printf("powered:        %u (%dd. %dh)\n",
+		v32, v32 / (24*60*60), v32 / (60*60) % 24);
+	printf("uptime:         %u (%dd. %dh)\n",
+		v32, v32 / (24*60*60), v32 / (60*60) % 24);
+#endif
+}
+
+void dump_temps(int fd)
+{
+#if PROMETHEUS
+	print_prometheus_reg(fd, 0x8d, "temperature{sensor=\"1\"}");
+	print_prometheus_reg(fd, 0x8e, "temperature{sensor=\"2\"}");
+#else
+	print_std_reg(fd, 0x8d, "temp1");
+	print_std_reg(fd, 0x8e, "temp2");
+#endif
+}
+
+void dump_fan(int fd)
+{
+#if PROMETHEUS
+	print_prometheus_reg(fd, 0x8d, "fan_rpm");
+#else
+	print_std_reg(fd, 0x90, "fan rpm");
+#endif
+}
+
+void dump_global_power(int fd)
+{
+#if PROMETHEUS
+	print_prometheus_reg(fd, 0x88, "global_supply_volt");
+	print_prometheus_reg(fd, 0xee, "global_power_watts");
+#else
+	print_std_reg(fd, 0x88, "supply volts");
+	print_std_reg(fd, 0xee, "total watts");
+#endif
+}
+
+void dump_powers(int fd)
+{
+#if PROMETHEUS
+	uint8_t osel;
+        uint32_t volts[3];
+        uint32_t amps[3];
+        uint32_t watts[3];
+
+	for (osel = 0; osel < 3; osel++) {
+		// reg0 write (output select)
+		send_recv_cmd(fd, 0x02, 0x00, osel, NULL, 0);
+		read_reg32(fd, 0x8b, &volts[osel]);
+		read_reg32(fd, 0x8c, &amps[osel]);
+		read_reg32(fd, 0x96, &watts[osel]);
+	}
+	for (osel = 0; osel < 3; osel++)
+            printf(PROMETHEUS_PREFIX "output_volts{ouput=\"%u\"} %u\n", osel, volts[osel]);
+	for (osel = 0; osel < 3; osel++)
+            printf(PROMETHEUS_PREFIX "output_amps{ouput=\"%u\"} %u\n", osel, amps[osel]);
+	for (osel = 0; osel < 3; osel++)
+            printf(PROMETHEUS_PREFIX "output_watts{ouput=\"%u\"} %u\n", osel, watts[osel]);
+#else
+	uint8_t osel;
+
+	for (osel = 0; osel < 3; osel++) {
+		// reg0 write (output select)
+		send_recv_cmd(fd, 0x02, 0x00, osel, NULL, 0);
+		print_std_reg(fd, 0x8b, "output%u volts", osel);
+		print_std_reg(fd, 0x8c, "output%u amps", osel);
+		print_std_reg(fd, 0x96, "output%u watts", osel);
+	}
+#endif
+}
+
+
 int main(int argc, char *argv[])
 {
 	int had_eacces = 0;
-	char name[63];
-	uint32_t v32;
-	uint8_t osel;
 	int i, fd;
 
 	if (argc > 1) {
@@ -244,6 +367,8 @@ int main(int argc, char *argv[])
 		fd = try_open_device(argv[1], 1);
 	}
 	else {
+		char name[63];
+
 		for (i = 0; i < 16; i++) {
 			snprintf(name, sizeof(name), "/dev/hidraw%d", i);
 			fd = try_open_device(name, 0);
@@ -265,34 +390,12 @@ int main(int argc, char *argv[])
 	if (fd == -1)
 		return 1;
 
-	name[sizeof(name) - 1] = 0;
-	send_recv_cmd(fd, 0xfe, 0x03, 0x00, name, sizeof(name) - 1);
-	printf("name:           '%s'\n", name);
-	read_reg(fd, 0x99, name, sizeof(name) - 1);
-	printf("vendor:         '%s'\n", name);
-	read_reg(fd, 0x9a, name, sizeof(name) - 1);
-	printf("product:        '%s'\n", name);
-
-	read_reg32(fd, 0xd1, &v32);
-	printf("powered:        %u (%dd. %dh)\n",
-		v32, v32 / (24*60*60), v32 / (60*60) % 24);
-	read_reg32(fd, 0xd2, &v32);
-	printf("uptime:         %u (%dd. %dh)\n",
-		v32, v32 / (24*60*60), v32 / (60*60) % 24);
-
-	print_std_reg(fd, 0x8d, "temp1");
-	print_std_reg(fd, 0x8e, "temp2");
-	print_std_reg(fd, 0x90, "fan rpm");
-	print_std_reg(fd, 0x88, "supply volts");
-	print_std_reg(fd, 0xee, "total watts");
-
-	for (osel = 0; osel < 3; osel++) {
-		// reg0 write (output select)
-		send_recv_cmd(fd, 0x02, 0x00, osel, NULL, 0);
-		print_std_reg(fd, 0x8b, "output%u volts", osel);
-		print_std_reg(fd, 0x8c, "output%u amps", osel);
-		print_std_reg(fd, 0x96, "output%u watts", osel);
-	}
+	dump_names(fd);
+	dump_times(fd);
+	dump_temps(fd);
+	dump_fan(fd);
+	dump_global_power(fd);
+	dump_powers(fd);
 
 	send_recv_cmd(fd, 0x02, 0x00, 0x00, NULL, 0);
 
