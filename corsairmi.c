@@ -67,6 +67,7 @@
 
 #define PROMETHEUS 1
 #define PROMETHEUS_PREFIX "corsair_"
+#define GREEN_LIGHT "green_equipment_power_consumption_va"
 
 static const uint16_t products[] = {
 	0x1c0a, /* RM650i */
@@ -320,12 +321,21 @@ void dump_fan(int fd)
 void dump_global_power(int fd)
 {
 #if PROMETHEUS
+	uint16_t volts;
+	uint16_t watts;
+
+	read_reg16(fd, 0x88, &volts);
+	read_reg16(fd, 0xee, &watts);
+
 	printf("# HELP " PROMETHEUS_PREFIX "global_supply_volts Global power supply volts\n");
 	printf("# TYPE " PROMETHEUS_PREFIX "global_supply_volts gauge\n");
+	printf(PROMETHEUS_PREFIX "global_supply_volts %.1f\n", mkv(volts));
 	printf("# HELP " PROMETHEUS_PREFIX "global_power_watts Global power used in watts\n");
 	printf("# TYPE " PROMETHEUS_PREFIX "global_power_watts gauge\n");
-	print_prometheus_reg(fd, 0x88, "global_supply_volts");
-	print_prometheus_reg(fd, 0xee, "global_power_watts");
+	printf(PROMETHEUS_PREFIX "global_power_watts %.1f\n", mkv(watts));
+	printf("# HELP " PROMETHEUS_PREFIX GREEN_LIGHT " Global power used in watts\n");
+	printf("# TYPE " PROMETHEUS_PREFIX GREEN_LIGHT " gauge\n");
+	printf(PROMETHEUS_PREFIX GREEN_LIGHT " %.1f\n", mkv(watts));
 #else
 	print_std_reg(fd, 0x88, "supply volts");
 	print_std_reg(fd, 0xee, "total watts");
